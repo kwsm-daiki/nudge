@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<title>Nudge</title>
+<meta name="description" content="期限が近い TODO をそっと知らせる、自分専用の TODO リスト">
+<meta name="theme-color" content="#f7f7f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#16171a" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
+<meta name="apple-mobile-web-app-title" content="Nudge">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icons/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="stylesheet" href="./style.css?v=1">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.1 9.2 4.5 4.5 0 0 0 7 18z"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7a1 1 0 0 1 .7.3l8 8a1 1 0 0 1 0 1.4l-7.7 7.7a1 1 0 0 1-1.4 0l-8-8a1 1 0 0 1-.3-.7z"/><circle cx="8" cy="8" r="1.4"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12.5a1.5 1.5 0 0 0 1.5 1.5h7a1.5 1.5 0 0 0 1.5-1.5L18 7M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+</svg>
+
+<div id="app" class="app">
+  <header class="top">
+    <h1 class="brand">Nudge</h1>
+    <button id="syncBtn" class="sync" type="button" aria-label="同期の状態を見る">
+      <svg class="ic"><use href="#i-cloud"/></svg><span id="syncText">読み込み中</span>
+    </button>
+    <button id="settingsBtn" class="icon-btn" type="button" aria-label="設定">
+      <svg class="ic"><use href="#i-gear"/></svg>
+    </button>
+  </header>
+
+  <nav id="tabs" class="tabs" aria-label="カテゴリで絞り込む"></nav>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <main id="list" class="list" aria-live="polite">
+    <p class="empty">読み込み中…</p>
+  </main>
+
+  <div id="toast" class="toast" role="status" hidden>
+    <span id="toastText"></span>
+    <button id="toastUndo" type="button">元に戻す</button>
+  </div>
+
+  <form id="composer" class="composer" autocomplete="off">
+    <button id="dueBtn" class="tool" type="button" aria-label="期日を選ぶ">
+      <svg class="ic"><use href="#i-cal"/></svg><span class="tool-label"></span>
+    </button>
+    <button id="dueClear" class="tool-x" type="button" aria-label="期日を外す" hidden><svg class="ic"><use href="#i-x"/></svg></button>
+    <button id="catBtn" class="tool" type="button" aria-label="カテゴリを選ぶ">
+      <svg class="ic"><use href="#i-tag"/></svg><span class="tool-label"></span>
+    </button>
+    <button id="catClear" class="tool-x" type="button" aria-label="カテゴリを外す" hidden><svg class="ic"><use href="#i-x"/></svg></button>
+    <input id="newTitle" class="new-title" type="text" placeholder="やることを入力" enterkeyhint="send" aria-label="やることを入力" maxlength="300">
+    <button id="addBtn" class="add" type="submit" aria-label="追加"><svg class="ic"><use href="#i-up"/></svg></button>
+  </form>
+</div>
+
+<div id="sheetWrap" class="sheet-wrap" hidden>
+  <div id="sheetBackdrop" class="sheet-backdrop"></div>
+  <section id="sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle"></section>
+</div>
+
+<script src="./app.js?v=1"></script>
+</body>
+</html>
