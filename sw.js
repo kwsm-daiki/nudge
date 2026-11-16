@@ -1,14 +1,14 @@
 // Nudge の Service Worker（オフラインで動かすため）
 // 中身を変えたら VERSION を上げる（index.html の ?v= も合わせる）
 // 同じオリジン（<ユーザー名>.github.io）にほかのアプリもあるので、触るキャッシュは "nudge-" で始まるものだけ
-const VERSION = "v1";
+const VERSION = "v2";
 const PREFIX = "nudge-";
 const CACHE = PREFIX + VERSION;
 const FILES = [
   "./",
   "./index.html",
-  "./style.css?v=1",
-  "./app.js?v=1",
+  "./style.css?v=2",
+  "./app.js?v=2",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",

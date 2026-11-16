@@ -246,7 +246,7 @@
     if (sec === "overdue") return -dayDiff(today, due) + "日超過";
     if (sec === "today") return "今日";
     if (sec === "tomorrow") return "明日";
-    if (sec === "week") return WD[parseYmd(due).getDay()] + "曜";
+    if (sec === "week") return shortDate(due);
     if (sec === "later") return shortDate(due);
     return "";
   }
