@@ -3,10 +3,12 @@
 "use strict";
 
 (() => {
-  const APP_VERSION = 1;          // データの形の版。これより大きいデータには書かない
+  const APP_VERSION = 2;          // データの形の版。これより大きいデータには書かない（2: メモとチェックリスト）
   const K = { data: "nudge:data", meta: "nudge:meta", settings: "nudge:settings", ui: "nudge:ui" };
-  const TASK_FIELDS = ["title", "due", "category", "done", "deleted"];
+  const TASK_FIELDS = ["title", "due", "category", "done", "deleted", "notes"];
   const CAT_FIELDS = ["name", "color", "order", "deleted"];
+  const ITEM_FIELDS = ["text", "done", "order", "deleted"]; // チェック項目
+  const MAX_NOTES = 5000, MAX_ITEMS = 50, MAX_ITEM_TEXT = 300;
   const COMPANION = { done: ["doneAt"], deleted: ["deletedAt"] };
   const ZERO = "000000000000000:0";
   const TOMB_SHRINK_MS = 60 * 1000;            // 消してから1分たったら中身を捨てて墓石だけにする
@@ -98,9 +100,10 @@
   function stamp() { return String(tick()).padStart(15, "0") + ":" + getMeta().deviceId; }
   const stampMs = (s) => parseInt(String(s || ZERO).slice(0, 15), 10) || 0;
   const st = (o, f) => (o && o.t && o.t[f]) || ZERO;
-  function maxStamp(o) {
+  function maxStamp(o) { // チェック項目の t も数える
     let m = 0;
     for (const v of Object.values((o && o.t) || {})) m = Math.max(m, stampMs(v));
+    if (o && Array.isArray(o.checklist)) for (const it of o.checklist) m = Math.max(m, maxStamp(it));
     return m;
   }
 
@@ -130,9 +133,9 @@
     const at = item.deletedAt ? Date.parse(item.deletedAt) : stampMs(st(item, "deleted"));
     return now - at > TOMB_KEEP_MS;
   }
-  function mergeList(local, remote, fields, lastSyncAt, now) {
+  // id ごとに合わせる。merge(a, b) で1つずつ合わせる
+  function mergeById(local, remote, merge, lastSyncAt) {
     const map = new Map();
-    const remoteIds = new Set((remote || []).map((x) => x.id));
     for (const x of remote || []) map.set(x.id, x);
     const out = [];
     const seen = new Set();
@@ -140,19 +143,35 @@
       seen.add(a.id);
       const b = map.get(a.id);
       // 手元にだけあり、最後の同期より古いもの = ほかの端末で墓石まで片付いたもの。捨てる
-      if (!b && remote && lastSyncAt && !remoteIds.has(a.id) && maxStamp(a) < lastSyncAt) continue;
-      out.push(mergeItem(a, b, fields));
+      if (!b && remote && lastSyncAt && maxStamp(a) < lastSyncAt) continue;
+      out.push(merge(a, b));
     }
     for (const b of remote || []) if (!seen.has(b.id)) out.push(JSON.parse(JSON.stringify(b)));
-    return out.filter((x) => !tombExpired(x, now)).map((x) => shrink(x, now));
+    return out;
+  }
+  function tidy(list, now) { return list.filter((x) => !tombExpired(x, now)).map((x) => shrink(x, now)); }
+  function mergeTask(a, b, lastSyncAt) {
+    const r = mergeItem(a, b, TASK_FIELDS);
+    if (a && b && (Array.isArray(a.checklist) || Array.isArray(b.checklist))) {
+      r.checklist = mergeById(a.checklist || [], b.checklist || [], (x, y) => mergeItem(x, y, ITEM_FIELDS), lastSyncAt);
+    }
+    return r;
+  }
+  // チェック項目の片付け（墓石を縮める・1年で消す）。マージのあと、すべての TODO にかける
+  function tidyTask(t, now) {
+    if (t.deleted || !Array.isArray(t.checklist)) return t;
+    t.checklist = tidy(t.checklist, now);
+    if (!t.checklist.length) delete t.checklist;
+    return t;
   }
   function mergeData(local, remote, lastSyncAt) {
     const now = Date.now();
     const r = remote || null;
     const merged = Object.assign({}, r || {}, local);
     merged.version = APP_VERSION;
-    merged.tasks = mergeList(local.tasks || [], r && r.tasks, TASK_FIELDS, lastSyncAt, now);
-    merged.categories = mergeList(local.categories || [], r && r.categories, CAT_FIELDS, lastSyncAt, now);
+    merged.tasks = tidy(mergeById(local.tasks || [], r && r.tasks, (a, b) => mergeTask(a, b, lastSyncAt), lastSyncAt), now)
+      .map((t) => tidyTask(t, now));
+    merged.categories = tidy(mergeById(local.categories || [], r && r.categories, (a, b) => mergeItem(a, b, CAT_FIELDS), lastSyncAt), now);
     for (const c of DEFAULT_CATS) { // 最初の3つは必ずある（決まった id）
       if (!merged.categories.some((x) => x.id === c.id)) merged.categories.push({ ...c, deleted: false, t: {} });
     }
@@ -177,7 +196,15 @@
   function canonical(d) {
     if (!d) return "";
     const c = Object.assign({}, d);
-    c.tasks = [...(d.tasks || [])].sort((a, b) => (a.id < b.id ? -1 : 1));
+    const byId = (a, b) => (a.id < b.id ? -1 : 1);
+    // 空のメモ・空のチェックリストは省く（片方にだけ空の値があって書き込みが往復しないように）
+    c.tasks = [...(d.tasks || [])].sort(byId).map((t) => {
+      if (!("checklist" in t) && !("notes" in t)) return t;
+      const x = Object.assign({}, t);
+      if (Array.isArray(x.checklist) && x.checklist.length) x.checklist = [...x.checklist].sort(byId); else delete x.checklist;
+      if (x.notes === "" || x.notes == null) delete x.notes;
+      return x;
+    });
     c.categories = [...(d.categories || [])].sort((a, b) => (a.id < b.id ? -1 : 1));
     return JSON.stringify(sortDeep(c), null, 1);
   }
@@ -200,10 +227,12 @@
     reload();
     if (dataBroken) { render(); return; }
     fn(data);
+    data.version = APP_VERSION;
     saveData(data);
     const m = getMeta();
     setMeta({ dirtySeq: (m.dirtySeq || 0) + 1 });
     render();
+    updateEditSheet();
     scheduleSync();
   }
 
@@ -216,6 +245,11 @@
     return c || (data.categories || []).find((x) => x.id === "other") || DEFAULT_CATS[2];
   }
   function liveTasks() { return (data.tasks || []).filter((t) => !t.deleted && typeof t.title === "string"); }
+  // 消していないチェック項目（order 順、同じなら id 順）
+  function liveItems(t) {
+    return (Array.isArray(t && t.checklist) ? t.checklist : []).filter((x) => !x.deleted && typeof x.text === "string")
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.id < b.id ? -1 : 1));
+  }
 
   // ---------- 日付（端末の時刻で YYYY-MM-DD を作り、文字列で比べる） ----------
   const pad = (n) => String(n).padStart(2, "0");
@@ -330,6 +364,17 @@
       const label = t.done ? shortDate(t.due) : dueLabel(t.due, today);
       meta.append(el("span", { class: "due " + (t.done ? "" : sec), text: label }));
     }
+    const items = liveItems(t);
+    const doneN = items.filter((x) => x.done).length;
+    const hasNotes = typeof t.notes === "string" && t.notes !== "";
+    if (items.length) {
+      meta.append(el("span", { class: "cl-count" + (doneN === items.length ? " all" : "") }, icon("list"),
+        el("span", { text: doneN + "/" + items.length })));
+    }
+    if (hasNotes) meta.append(el("span", { class: "has-notes", title: "メモあり" }, icon("note")));
+    let label = "「" + t.title + "」を編集";
+    if (items.length) label += "。チェック項目 " + items.length + "つ中" + doneN + "つ完了";
+    if (hasNotes) label += "。メモあり";
     const ring = el("span", { class: "ring" }, icon("check"));
     const row = el("li", { class: cls.join(" "), "data-id": t.id },
       el("button", {
@@ -337,7 +382,7 @@
         "aria-label": t.done ? "「" + t.title + "」を未完了に戻す" : "「" + t.title + "」を完了にする",
         onclick: () => (t.done ? undoneTask(t.id) : completeTask(t.id))
       }, ring),
-      el("button", { class: "body", type: "button", "aria-label": "「" + t.title + "」を編集", onclick: () => openEdit(t.id) },
+      el("button", { class: "body", type: "button", "aria-label": label, onclick: () => openEdit(t.id) },
         el("span", { class: "title", text: t.title }),
         meta)
     );
@@ -417,17 +462,29 @@
 
   function renderBanner() {
     const b = $("banner");
-    let msg = "";
+    let msg = "", newer = false;
     if (dataBroken) {
       const raw = readJSON(K.data, null);
-      msg = raw && raw.version > APP_VERSION
-        ? "このデータは新しい版の Nudge で作られています。ページを読み込み直してください（壊さないよう、書き込みを止めています）。"
+      newer = !!(raw && raw.version > APP_VERSION);
+      msg = newer
+        ? "このデータは新しい版の Nudge で作られています。読み込み直してください（壊さないよう、書き込みを止めています）。"
         : "保存したデータが読めませんでした。上書きしないよう、書き込みを止めています。";
+    } else if (lastError && lastError.kind === "newer") {
+      newer = true;
+      msg = "GitHub のデータが新しい版の Nudge で作られています。読み込み直すと新しい版になります。";
     } else if (!storageOk) {
       msg = "この端末に保存できません（ブラウザの設定を確認してください）。閉じると消えます。";
     }
     b.hidden = !msg;
-    b.textContent = msg;
+    b.textContent = "";
+    if (!msg) return;
+    b.append(el("span", { text: msg }));
+    if (newer) b.append(el("button", { class: "banner-btn", type: "button", onclick: () => location.reload() }, "読み込み直す"));
+  }
+  // 新しい版の Service Worker を取りに行く（「新しい版」のデータを見たとき）
+  function checkUpdate() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {});
   }
 
   function updateBadge(all, today) {
@@ -484,6 +541,36 @@
       for (const [k, v] of Object.entries(fields)) {
         t[k] = v;
         if (TASK_FIELDS.includes(k)) t.t[k] = s;
+        if (k === "notes" && v === "") delete t.notes; // 空のメモは持たない（時刻だけ残して、消したことを伝える）
+      }
+    });
+  }
+
+  // チェック項目
+  function addItem(taskId, text) {
+    let ok = false;
+    mutate((d) => {
+      const t = d.tasks.find((x) => x.id === taskId);
+      if (!t || t.deleted || liveItems(t).length >= MAX_ITEMS) return;
+      t.checklist = Array.isArray(t.checklist) ? t.checklist : [];
+      const order = t.checklist.reduce((m, x) => Math.max(m, typeof x.order === "number" ? x.order : -1), -1) + 1;
+      const s = stamp();
+      const id = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
+      t.checklist.push({ id, text: text.slice(0, MAX_ITEM_TEXT), done: false, order, deleted: false, t: { text: s, done: s, order: s, deleted: s } });
+      ok = true;
+    });
+    return ok;
+  }
+  function setItem(taskId, itemId, fields) {
+    mutate((d) => {
+      const t = d.tasks.find((x) => x.id === taskId);
+      const it = t && Array.isArray(t.checklist) && t.checklist.find((x) => x.id === itemId);
+      if (!it) return;
+      const s = stamp();
+      it.t = it.t || {};
+      for (const [k, v] of Object.entries(fields)) {
+        if (v === null && k === "deletedAt") delete it[k]; else it[k] = v;
+        if (ITEM_FIELDS.includes(k)) it.t[k] = s;
       }
     });
   }
@@ -603,53 +690,288 @@
   }
 
   // ---------- 編集シート（自動保存） ----------
+  // 欄ごとに「入力したか」の印を持ち、入力したときだけ保存する（閉じただけでは保存しない）。
+  // 同期やほかのタブの変更が来たら updateEditSheet で、フォーカスがなく入力中でない欄だけ書き換える。
+  let edit = null; // { id, update }
+  function updateEditSheet() { if (edit && sheet && sheet.name === "edit") edit.update(); }
+  // Android の日本語入力では、変換を決める Enter で isComposing が立たないことがある（keyCode 229 も見る）
+  const isEnter = (e) => e.key === "Enter" && !e.isComposing && e.keyCode !== 229;
+  function keepVisible(node) { // キーボードに隠れないよう、見える位置へ
+    const go = () => { try { node.scrollIntoView({ block: "nearest" }); } catch (e) { /* 古いブラウザ */ } };
+    go();
+    setTimeout(go, 350); // キーボードが出きってからもう一度
+  }
+  // メモの中の URL（半角の文字だけで区切り、末尾の . , ) を外す。同じ URL は1つ）
+  function findUrls(text) {
+    const out = [];
+    for (let u of String(text || "").match(/https?:\/\/[!-~]+/g) || []) {
+      u = u.replace(/[.,)]+$/, "");
+      if (/^https?:\/\/[^/?#]+/.test(u) && !out.includes(u)) out.push(u);
+    }
+    return out;
+  }
+
   function openEdit(id) {
     reload();
-    const t = (data.tasks || []).find((x) => x.id === id);
-    if (!t || t.deleted) return;
-    const original = t.title;
-    let timer = null;
-    const ta = el("textarea", { class: "field-title", rows: "2", "aria-label": "TODO の名前", maxlength: "300", "data-autofocus": true });
-    ta.value = t.title;
-    const commitTitle = () => {
-      clearTimeout(timer);
-      const v = ta.value.trim().replace(/\s*\n\s*/g, " ");
-      const cur = (data.tasks || []).find((x) => x.id === id);
-      if (!cur || cur.deleted) return;
-      if (v && v !== cur.title) setField(id, { title: v });
-    };
-    ta.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(commitTitle, 600); });
-    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); ta.blur(); } });
-    ta.addEventListener("blur", commitTitle);
+    const t0 = (data.tasks || []).find((x) => x.id === id);
+    if (!t0 || t0.deleted) return;
+    const curTask = () => { const t = (data.tasks || []).find((x) => x.id === id); return t && !t.deleted ? t : null; };
 
-    const build = (box) => {
-      const cur = (data.tasks || []).find((x) => x.id === id) || t;
-      box.append(sheetHead("TODO の編集"));
-      box.append(ta);
-      box.append(el("h3", { text: "期日" }));
-      box.append(dueOptions(cur.due, (v) => { setField(id, { due: v }); refresh(); }, true));
-      box.append(el("h3", { text: "カテゴリ" }));
-      box.append(catOptions(catOf(cur).id, (v) => { setField(id, { category: v }); refresh(); }));
-      const info = [];
-      if (cur.createdAt) info.push("作成 " + new Date(cur.createdAt).toLocaleString("ja-JP", { dateStyle: "short", timeStyle: "short" }));
-      if (cur.done && cur.doneAt) info.push("完了 " + new Date(cur.doneAt).toLocaleString("ja-JP", { dateStyle: "short", timeStyle: "short" }));
-      box.append(el("div", { class: "actions" },
-        el("button", { class: "danger", type: "button", onclick: () => { commitTitle(); closeSheet(); deleteTask(id); } }, icon("trash"), "削除")));
-      if (info.length) box.append(el("p", { class: "note", text: info.join("　") }));
-      box.append(el("p", { class: "note", text: "変更はすぐ保存されます。" }));
-    };
-    const refresh = () => {
-      const box = $("sheet");
-      const keep = ta;
-      box.textContent = "";
-      box.append(el("div", { class: "grabber" }));
-      build(box);
-      if (keep !== ta) return;
-    };
-    openSheet("edit", build, () => {
-      commitTitle(); // 名前を空にしたら元のまま
-      if (!ta.value.trim()) ta.value = original;
+    // 文字の欄（名前・メモ）: 入力したときだけ保存。フォーカスがなく入力中でなければ最新の値に書き換える
+    function textField(node, o) {
+      const f = { dirty: false, timer: null };
+      f.commit = () => {
+        clearTimeout(f.timer);
+        if (!f.dirty) return;
+        f.dirty = false;
+        const cur = curTask();
+        if (!cur) return;
+        const v = o.normalize(node.value);
+        if (!v && !o.allowEmpty) return; // 空にしただけでは保存しない（離れたら元に戻る）
+        if (v !== o.get(cur)) o.save(v);
+      };
+      f.sync = (cur) => {
+        if (!cur || document.activeElement === node || f.dirty) return;
+        const v = o.get(cur);
+        if (node.value !== v) { node.value = v; if (o.changed) o.changed(); }
+      };
+      node.addEventListener("input", () => {
+        f.dirty = true;
+        clearTimeout(f.timer);
+        f.timer = setTimeout(f.commit, 600);
+        if (o.changed) o.changed();
+      });
+      node.addEventListener("blur", () => { f.commit(); f.sync(curTask()); });
+      return f;
+    }
+
+    // 名前
+    const titleTa = el("textarea", { class: "field-title", rows: "2", "aria-label": "TODO の名前", maxlength: "300", "data-autofocus": true });
+    titleTa.value = t0.title;
+    const title = textField(titleTa, {
+      get: (t) => t.title,
+      normalize: (s) => s.trim().replace(/\s*\n\s*/g, " "),
+      save: (v) => setField(id, { title: v })
     });
+    titleTa.addEventListener("keydown", (e) => { if (isEnter(e)) { e.preventDefault(); titleTa.blur(); } });
+
+    // 期日・カテゴリ（値が変わったときだけ描き直す）
+    const dueBox = el("div"), catBox = el("div");
+    let shownDue, shownCat;
+
+    // メモ
+    const notesTa = el("textarea", { class: "field-notes", rows: "2", "aria-label": "メモ", placeholder: "メモ（URL も書けます）", maxlength: String(MAX_NOTES) });
+    notesTa.value = t0.notes || "";
+    const linkBox = el("div", { class: "links" });
+    const grow = () => { notesTa.style.height = "auto"; notesTa.style.height = (notesTa.scrollHeight + 2) + "px"; };
+    const drawLinks = () => {
+      linkBox.textContent = "";
+      for (const u of findUrls(notesTa.value)) {
+        linkBox.append(el("a", { class: "link-row", href: u, target: "_blank", rel: "noopener noreferrer" }, icon("link"), el("span", { text: u })));
+      }
+    };
+    const notes = textField(notesTa, {
+      get: (t) => (typeof t.notes === "string" ? t.notes : ""),
+      normalize: (s) => s.trim().slice(0, MAX_NOTES),
+      allowEmpty: true,
+      save: (v) => setField(id, { notes: v }),
+      changed: () => { grow(); drawLinks(); }
+    });
+    drawLinks();
+
+    // チェックリスト
+    const clHead = el("h3", { text: "チェックリスト" });
+    const clList = el("ul", { class: "cl" });
+    const clAdd = el("button", { class: "cl-add", type: "button", onclick: () => openDraft() }, icon("plus"), "チェック項目を足す");
+    const clMax = el("p", { class: "note", text: "チェック項目は " + MAX_ITEMS + " 個までです。" });
+    const clDoneAll = el("button", { class: "secondary cl-doneall", type: "button", onclick: () => { flushAll(); closeSheet(); completeTask(id); } }, icon("check"), "TODO も完了にする");
+    const rows = new Map();  // 項目の id → 行
+    const undos = new Map(); // 消したばかりの項目の id → 「元に戻す」の行
+    let draft = null;        // 足している途中の空の欄
+    const itemOf = (itemId) => { const t = curTask(); return t && Array.isArray(t.checklist) ? t.checklist.find((x) => x.id === itemId) : null; };
+
+    function itemRow(it) {
+      const r = { dirty: false, timer: null };
+      r.box = el("button", {
+        class: "cl-check", type: "button", role: "checkbox",
+        onclick: () => { const c = itemOf(it.id); if (c && !c.deleted) setItem(id, it.id, { done: !c.done }); }
+      }, el("span", { class: "ring" }, icon("check")));
+      r.input = el("input", { class: "cl-text", type: "text", maxlength: String(MAX_ITEM_TEXT), enterkeyhint: "done", "aria-label": "チェック項目の文字" });
+      r.input.value = it.text;
+      r.del = el("button", { class: "cl-x", type: "button", onclick: () => removeItem(it.id) }, icon("x"));
+      // 入力欄の文字には取り消し線が描かれないので、終えた項目は同じ文字を重ねて線を見せる
+      r.mirror = el("span", { class: "cl-mirror", "aria-hidden": "true" });
+      r.li = el("li", { class: "cl-row" }, r.box, el("span", { class: "cl-field" }, r.input, r.mirror), r.del);
+      r.commit = () => {
+        clearTimeout(r.timer);
+        if (!r.dirty) return;
+        r.dirty = false;
+        const c = itemOf(it.id);
+        const v = r.input.value.trim();
+        if (!c || c.deleted || !v) return; // 全部消して離れたら元の文字に戻る
+        if (v !== c.text) setItem(id, it.id, { text: v });
+      };
+      r.sync = (c) => {
+        r.li.classList.toggle("done", !!c.done);
+        r.box.setAttribute("aria-checked", String(!!c.done));
+        r.box.setAttribute("aria-label", c.text);
+        r.del.setAttribute("aria-label", "「" + c.text + "」を消す");
+        if (document.activeElement !== r.input && !r.dirty && r.input.value !== c.text) r.input.value = c.text;
+        r.mirror.textContent = r.input.value;
+      };
+      r.input.addEventListener("input", () => { r.dirty = true; r.mirror.textContent = r.input.value; clearTimeout(r.timer); r.timer = setTimeout(r.commit, 600); });
+      r.input.addEventListener("blur", () => { r.commit(); const c = itemOf(it.id); if (c && !c.deleted) r.sync(c); });
+      r.input.addEventListener("focus", () => keepVisible(r.li));
+      r.input.addEventListener("keydown", (e) => {
+        if (isEnter(e)) { e.preventDefault(); r.input.blur(); }
+        else if (e.key === "Backspace" && !r.input.value) { e.preventDefault(); focusPrev(r.li); }
+      });
+      return r;
+    }
+    function focusPrev(li) { // 1つ上の項目の欄へ（文字の最後に）
+      let p = li.previousElementSibling;
+      while (p && !p.querySelector(".cl-text")) p = p.previousElementSibling;
+      const inp = p && p.querySelector(".cl-text");
+      if (inp) { inp.focus(); const n = inp.value.length; try { inp.setSelectionRange(n, n); } catch (e) { /* なし */ } }
+    }
+    function removeItem(itemId) {
+      const c = itemOf(itemId);
+      if (!c) return;
+      const r = rows.get(itemId);
+      const text = c.text;
+      const undoBtn = el("button", { type: "button", "aria-label": "「" + text + "」を元に戻す" }, "元に戻す");
+      const u = { li: el("li", { class: "cl-undo" }, el("span", { text: "「" + text + "」を消しました" }), undoBtn), timer: null };
+      const end = () => { clearTimeout(u.timer); undos.delete(itemId); const cur = curTask(); if (cur) renderChecklist(cur); };
+      undoBtn.addEventListener("click", () => { end(); setItem(id, itemId, { deleted: false, deletedAt: null }); });
+      u.timer = setTimeout(end, 5000);
+      undos.set(itemId, u);
+      if (r) { clearTimeout(r.timer); r.dirty = false; }
+      setItem(id, itemId, { deleted: true, deletedAt: new Date().toISOString() });
+    }
+
+    function openDraft() {
+      const cur = curTask();
+      if (!cur || liveItems(cur).length >= MAX_ITEMS) return;
+      if (!draft) {
+        const input = el("input", { class: "cl-text", type: "text", maxlength: String(MAX_ITEM_TEXT), enterkeyhint: "next", "aria-label": "新しいチェック項目", placeholder: "チェック項目" });
+        const li = el("li", { class: "cl-row draft" }, el("span", { class: "cl-check ghost", "aria-hidden": "true" }, el("span", { class: "ring" })), input);
+        draft = { li, input };
+        input.addEventListener("keydown", (e) => {
+          if (isEnter(e)) {
+            e.preventDefault();
+            const v = input.value.trim();
+            if (!v) return;
+            input.value = "";
+            addItem(id, v); // 足した項目は空の欄の上に入る。空の欄はそのまま（フォーカスも残る）
+            const c = curTask();
+            if (c && liveItems(c).length >= MAX_ITEMS) closeDraft(); else keepVisible(li);
+          } else if (e.key === "Backspace" && !input.value) {
+            e.preventDefault();
+            const prev = li;
+            focusPrev(prev);
+            closeDraft();
+          }
+        });
+        input.addEventListener("blur", () => {
+          setTimeout(() => {
+            if (!draft || draft.input !== input || document.activeElement === input) return;
+            const v = input.value.trim();
+            closeDraft();
+            if (v) addItem(id, v); // 空のまま離れたら足さない
+          }, 0);
+        });
+        input.addEventListener("focus", () => keepVisible(li));
+      }
+      renderChecklist(cur);
+      draft.input.focus();
+      keepVisible(draft.li);
+    }
+    function closeDraft() {
+      if (!draft) return;
+      draft.li.remove();
+      draft = null;
+      const cur = curTask();
+      if (cur) renderChecklist(cur);
+    }
+
+    function renderChecklist(cur) {
+      const list = (Array.isArray(cur.checklist) ? cur.checklist : [])
+        .filter((x) => typeof x.text === "string" && (!x.deleted || undos.has(x.id)))
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.id < b.id ? -1 : 1));
+      const want = [];
+      const live = new Set();
+      for (const x of list) {
+        if (x.deleted) { want.push(undos.get(x.id).li); continue; }
+        live.add(x.id);
+        let r = rows.get(x.id);
+        if (!r) { r = itemRow(x); rows.set(x.id, r); }
+        r.sync(x);
+        want.push(r.li);
+      }
+      for (const k of [...rows.keys()]) if (!live.has(k)) rows.delete(k);
+      if (draft) want.push(draft.li);
+      want.forEach((node, i) => { if (clList.children[i] !== node) clList.insertBefore(node, clList.children[i] || null); });
+      while (clList.children.length > want.length) clList.lastChild.remove();
+      const n = live.size;
+      const doneN = list.filter((x) => !x.deleted && x.done).length;
+      clHead.hidden = !want.length;
+      clAdd.hidden = n >= MAX_ITEMS;
+      clMax.hidden = n < MAX_ITEMS;
+      clDoneAll.hidden = !(n > 0 && doneN === n && !cur.done);
+    }
+
+    const info = el("p", { class: "note" });
+    function update() {
+      const cur = curTask();
+      if (!cur) { if (sheet && sheet.name === "edit") closeSheet(); return; }
+      title.sync(cur);
+      notes.sync(cur);
+      if (cur.due !== shownDue) {
+        shownDue = cur.due;
+        dueBox.textContent = "";
+        dueBox.append(dueOptions(cur.due, (v) => setField(id, { due: v }), true));
+      }
+      const catKey = catOf(cur).id + "|" + catList().map((c) => c.id + c.name + c.color).join(",");
+      if (catKey !== shownCat) {
+        shownCat = catKey;
+        catBox.textContent = "";
+        catBox.append(catOptions(catOf(cur).id, (v) => setField(id, { category: v })));
+      }
+      renderChecklist(cur);
+      const parts = [];
+      if (cur.createdAt) parts.push("作成 " + new Date(cur.createdAt).toLocaleString("ja-JP", { dateStyle: "short", timeStyle: "short" }));
+      if (cur.done && cur.doneAt) parts.push("完了 " + new Date(cur.doneAt).toLocaleString("ja-JP", { dateStyle: "short", timeStyle: "short" }));
+      info.textContent = parts.join("　");
+      info.hidden = !parts.length;
+    }
+
+    // 入力した途中のものを保存する（閉じる・削除・完了の前）
+    function flushAll() {
+      title.commit();
+      notes.commit();
+      for (const r of rows.values()) r.commit();
+      if (draft) { const v = draft.input.value.trim(); const d = draft; draft = null; d.li.remove(); if (v) addItem(id, v); }
+    }
+
+    openSheet("edit", (box) => {
+      box.append(sheetHead("TODO の編集"));
+      box.append(titleTa);
+      box.append(el("h3", { text: "期日" }), dueBox);
+      box.append(el("h3", { text: "カテゴリ" }), catBox);
+      box.append(clHead, clList, clAdd, clMax, clDoneAll);
+      box.append(el("h3", { text: "メモ" }), notesTa, linkBox);
+      box.append(el("div", { class: "actions" },
+        el("button", { class: "danger", type: "button", onclick: () => { flushAll(); closeSheet(); deleteTask(id); } }, icon("trash"), "削除")));
+      box.append(info);
+      box.append(el("p", { class: "note", text: "変更はすぐ保存されます。" }));
+      update();
+      requestAnimationFrame(grow);
+    }, () => {
+      edit = null;
+      flushAll(); // 入力した途中のものだけ保存する。名前を空にしていたら保存しない
+      for (const u of undos.values()) clearTimeout(u.timer);
+    });
+    edit = { id, update };
   }
 
   // ---------- 設定 ----------
@@ -959,6 +1281,7 @@
         lastError = { kind: e.kind || "other", msg: e.message || String(e) };
         setMeta({ lastResult: e.status ? "失敗（HTTP " + e.status + "）" : (e.kind === "offline" ? "オフライン" : "失敗") });
         if (e.kind === "forbidden") pauseUntil = Date.now() + 60 * 1000;
+        if (e.kind === "newer") checkUpdate();
         if (e.kind !== "offline" && e.kind !== "forbidden") console.warn("Nudge sync:", e);
       }
     };
@@ -969,6 +1292,7 @@
       syncing = false;
       reload();
       render();
+      updateEditSheet();
     }
   }
 
@@ -1033,7 +1357,8 @@
     window.addEventListener("storage", (e) => {
       if (e.key && !e.key.startsWith("nudge:")) return;
       reload();
-      if (!sheet || sheet.name !== "edit") render(); else renderSync();
+      render();
+      updateEditSheet();
     });
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") { reload(); checkDay(); render(); requestSync(0); }

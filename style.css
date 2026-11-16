@@ -345,3 +345,85 @@ details.help { margin-top: 0.75rem; font-size: 0.875rem; }
 details.help summary { cursor: pointer; color: var(--accent); }
 details.help ol { padding-left: 1.25rem; margin: 0.5rem 0; }
 details.help li { margin: 0.25rem 0; }
+
+/* ---------- 第2版: メモとチェックリスト ---------- */
+.banner { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.banner span { flex: 1; min-width: 12rem; }
+.banner-btn {
+  border: 0; background: var(--red); color: #fff; font-weight: 600;
+  padding: 0.5rem 0.875rem; border-radius: 0.625rem; min-height: 2.5rem;
+}
+
+/* 一覧の行: チェックの数とメモの印 */
+.cl-count { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--muted); }
+.cl-count .ic, .has-notes .ic { width: 1rem; height: 1rem; }
+.cl-count.all .ic { color: var(--accent); }
+.has-notes { display: inline-flex; align-items: center; color: var(--muted); }
+
+/* 編集シートのチェックリスト */
+.cl { list-style: none; margin: 0; padding: 0; }
+.cl-row { display: flex; align-items: center; gap: 0.25rem; min-height: 3rem; }
+.cl-check {
+  flex: none; width: 3rem; height: 3rem; border: 0; background: transparent; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; color: var(--muted);
+}
+.cl-check .ring {
+  width: 1.25rem; height: 1.25rem; border-radius: 50%; border: 2px solid currentColor;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.cl-check .ring .ic { width: 0.8rem; height: 0.8rem; stroke-width: 3; opacity: 0; color: var(--accent-text); }
+.cl-check.ghost .ring { border-style: dashed; opacity: 0.6; }
+.cl-row.done .cl-check .ring { background: var(--accent); border-color: var(--accent); }
+.cl-row.done .cl-check .ring .ic { opacity: 1; }
+.cl-text {
+  flex: 1; min-width: 0; border: 1px solid transparent; background: transparent; border-radius: 0.5rem;
+  padding: 0.5rem 0.5rem; font-size: 1rem; outline: none; min-height: 2.5rem;
+}
+.cl-text:hover { border-color: var(--line); }
+.cl-text:focus { border-color: var(--accent); background: var(--bg); }
+.cl-field { flex: 1; min-width: 0; position: relative; display: flex; }
+.cl-mirror { /* 線は背景で引く（text-decoration だと描かれない環境があった） */
+  position: absolute; left: calc(0.5rem + 1px); top: 50%; transform: translateY(-50%);
+  max-width: calc(100% - 1rem - 2px); pointer-events: none; white-space: pre; overflow: hidden; font-size: 1rem;
+  color: var(--muted); display: none;
+  background: linear-gradient(var(--muted), var(--muted)) center / 100% 1.5px no-repeat;
+}
+.cl-row.done .cl-text:not(:focus) { color: transparent; }
+.cl-row.done .cl-text:not(:focus) + .cl-mirror { display: inline-block; }
+.cl-x {
+  flex: none; width: 2.75rem; height: 2.75rem; margin-left: 0.5rem; border: 0; background: transparent; color: var(--muted);
+  border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+}
+.cl-x .ic { width: 1.125rem; height: 1.125rem; }
+.cl-x:hover { background: var(--surface-2); color: var(--text); }
+.cl-undo {
+  display: flex; align-items: center; gap: 0.5rem; min-height: 3rem; padding-left: 0.75rem;
+  color: var(--muted); font-size: 0.875rem; background: var(--surface-2); border-radius: 0.625rem; margin: 0.125rem 0;
+}
+.cl-undo span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cl-undo button { border: 0; background: transparent; color: var(--accent); font-weight: 700; padding: 0.5rem 0.75rem; min-height: 2.75rem; border-radius: 0.5rem; }
+.cl-add {
+  display: inline-flex; align-items: center; gap: 0.375rem; margin-top: 0.75rem;
+  border: 0; background: transparent; color: var(--accent); font-size: 0.875rem;
+  padding: 0.5rem 0.625rem; min-height: 2.75rem; border-radius: 0.625rem;
+}
+.cl + .cl-add { margin-top: 0.25rem; }
+.cl-add .ic { width: 1.125rem; height: 1.125rem; }
+.cl-add:hover { background: var(--surface-2); }
+.cl-doneall { display: inline-flex; align-items: center; gap: 0.375rem; margin-top: 0.5rem; font-size: 0.875rem; }
+.cl-doneall .ic { width: 1rem; height: 1rem; color: var(--accent); }
+
+/* メモ */
+.field-notes {
+  width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 0.75rem;
+  padding: 0.625rem 0.875rem; font-size: 1rem; resize: none; min-height: 4rem; outline: none; line-height: 1.5;
+}
+.field-notes:focus { border-color: var(--accent); }
+.links { display: flex; flex-direction: column; margin-top: 0.25rem; }
+.link-row {
+  display: flex; align-items: center; gap: 0.5rem; min-height: 2.75rem; padding: 0 0.5rem;
+  color: var(--accent); text-decoration: underline; text-underline-offset: 2px; font-size: 0.875rem; border-radius: 0.5rem;
+}
+.link-row:hover { background: var(--surface-2); }
+.link-row .ic { width: 1rem; height: 1rem; flex: none; }
+.link-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

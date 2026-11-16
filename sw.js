@@ -1,14 +1,14 @@
 // Nudge の Service Worker（オフラインで動かすため）
 // 中身を変えたら VERSION を上げる（index.html の ?v= も合わせる）
 // 同じオリジン（<ユーザー名>.github.io）にほかのアプリもあるので、触るキャッシュは "nudge-" で始まるものだけ
-const VERSION = "v2";
+const VERSION = "v3";
 const PREFIX = "nudge-";
 const CACHE = PREFIX + VERSION;
 const FILES = [
   "./",
   "./index.html",
-  "./style.css?v=2",
-  "./app.js?v=2",
+  "./style.css?v=3",
+  "./app.js?v=3",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
@@ -57,7 +57,8 @@ self.addEventListener("fetch", (event) => {
       let done = false;
       const fromCache = () => caches.match("./index.html", { ignoreSearch: true });
       const finish = (res) => { if (!done && res) { done = true; resolve(res); } };
-      const net = fetch(req).then((res) => keep("./index.html", res));
+      // ブラウザの HTTP キャッシュも通さず、新しいページを確かめる（公開後に古い版が残らないように）
+      const net = fetch(req.url, { cache: "no-cache" }).then((res) => keep("./index.html", res));
       const timer = setTimeout(() => { fromCache().then(finish); }, 3000);
       net.then((res) => { clearTimeout(timer); finish(res); })
         .catch(() => { clearTimeout(timer); fromCache().then((c) => finish(c || Response.error())); });
